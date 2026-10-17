@@ -1257,7 +1257,7 @@ class LLMAgentPolicy(PolicyBase):
                 outcome["message"] = self._client.complete(
                     outgoing, schemas, temperature=self._temperature, reasoning_effort=self._effort
                 )
-            except BaseException as exc:  # handed to the waiting thread, or dropped if abandoned
+            except Exception as exc:  # handed to the waiting thread, or dropped if abandoned
                 outcome["error"] = exc
             finally:
                 finished.set()
@@ -1276,7 +1276,9 @@ class LLMAgentPolicy(PolicyBase):
         error = outcome.get("error")
         if error is not None:
             raise error
-        message: AssistantMessage = outcome["message"]
+        message: AssistantMessage | None = outcome.get("message")
+        if message is None:  # pragma: no cover - only a non-Exception exit of the thread
+            raise RuntimeError("model request thread ended without a reply")
         return message
 
     def _settle_abandoned_call(self) -> None:
