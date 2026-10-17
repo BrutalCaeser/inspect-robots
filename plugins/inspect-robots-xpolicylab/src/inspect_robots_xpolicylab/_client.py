@@ -11,6 +11,7 @@ the ``hello`` handshake via :meth:`connect`).
 from __future__ import annotations
 
 import logging
+import socket
 import time
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
@@ -207,9 +208,16 @@ class PolicyClient:
             self._ws = None
 
     def _abandon(self) -> None:
-        """Drop a dead socket without protocol goodbyes."""
+        """Drop a dead or desynchronized socket immediately, without protocol goodbyes.
+
+        ``close()`` would wait up to the close timeout (10 s by default) for a
+        closing handshake the peer may never send; tear the socket down instead.
+        """
         ws = self._ws
         self._ws = None
         if ws is not None:
-            with suppress(Exception):
-                ws.close()
+            # shutdown() also unblocks websockets' reader thread on Linux.
+            with suppress(OSError):
+                ws.socket.shutdown(socket.SHUT_RDWR)
+            with suppress(OSError):
+                ws.socket.close()

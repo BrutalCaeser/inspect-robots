@@ -6,6 +6,7 @@ The stub server in ``conftest.py`` speaks the real wire protocol in-process.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import msgpack
@@ -172,10 +173,18 @@ def test_interrupt_mid_reply_reconnects_for_next_trial(
             monkeypatch.setattr(ws, "recv", real_recv)
             raise _Interrupt
 
+        def never_acknowledged_close(*args: Any, **kwargs: Any) -> None:
+            # A graceful close would wait out the 10 s close timeout here.
+            raise AssertionError("interrupt teardown must not wait for a closing handshake")
+
         monkeypatch.setattr(ws, "recv", interrupted_recv)
+        monkeypatch.setattr(ws, "close", never_acknowledged_close)
+        started = time.monotonic()
         with pytest.raises(_Interrupt):
             policy.act(_observation())
+        assert time.monotonic() - started < 1
         assert not policy._client.connected
+        assert ws.socket.fileno() == -1
 
         # The next trial reconnects instead of reading the abandoned stream.
         policy.reset(Scene(id="s1", instruction="next trial"))
