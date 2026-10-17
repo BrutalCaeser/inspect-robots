@@ -90,9 +90,11 @@ def interruptible() -> Iterator[None]:
     if not active():
         yield
         return
-    check()
+    # Arm before checking: a signal landing between the two then raises from
+    # the handler, so no request can slip into the wait as a flag only.
     _State.interruptible = True
     try:
+        check()
         yield
     finally:
         _State.interruptible = False

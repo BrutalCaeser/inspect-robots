@@ -84,7 +84,7 @@ class _BlockingPolicy:
                 deadline = time.monotonic() + 5
                 while not self.release.is_set() and time.monotonic() < deadline:
                     time.sleep(0.005)
-            except BaseException:
+            except _operator_end.OperatorEndRequested:
                 if not self.swallow:
                     raise
                 # A policy that swallows the interrupt still returns a reply,
@@ -166,6 +166,28 @@ def test_end_mid_trial_skips_rest_of_chunk_and_next_call() -> None:
     assert len(record.steps) == 3
     assert policy.replies == 1
     assert record.termination_reason == OPERATOR_END
+
+
+@pytest.mark.usefixtures("end_signal")
+def test_end_right_after_entry_check_never_enters_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_check = _operator_end.check
+
+    def check_then_signal() -> None:
+        # Deliver End immediately after the entry check passes: the boundary
+        # where an unarmed handler would only set the flag.
+        real_check()
+        _send_end()
+
+    monkeypatch.setattr(_operator_end, "check", check_then_signal)
+    entered: list[bool] = []
+
+    with pytest.raises(_operator_end.OperatorEndRequested), _operator_end.interruptible():
+        entered.append(True)
+
+    assert entered == []
+    assert not _operator_end._State.interruptible
 
 
 @pytest.mark.usefixtures("end_signal")
