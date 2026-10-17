@@ -60,7 +60,7 @@ from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, cast
 
-from inspect_robots import __version__
+from inspect_robots import __version__, _operator_end
 from inspect_robots._claims import DeviceClaim, claim_devices
 from inspect_robots._dotenv import init_dotenv
 from inspect_robots._html import (
@@ -1640,6 +1640,9 @@ def _announce_live_view(
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    # Before any hardware opens, so a supervisor's SIGUSR1 End never kills the
+    # process unparked; see _operator_end for the protocol.
+    _operator_end.install()
     if args.rerun_port is not None and args.rerun_connect is not None:
         raise SystemExit(
             "--rerun-port spawns a local viewer and --rerun-connect streams "
@@ -1944,6 +1947,9 @@ _EVAL_SET_OUTPUT_LOCK = threading.Lock()
 
 def _cmd_eval_set(args: argparse.Namespace) -> int:
     """Run matched tasks with one component lifecycle per serial set or parallel task."""
+    # Before any hardware opens, so a supervisor's SIGUSR1 End never kills the
+    # process unparked; see _operator_end for the protocol.
+    _operator_end.install()
     from inspect_robots._parallel import run_parallel, validate_max_workers
     from inspect_robots.errors import ConfigError
 
