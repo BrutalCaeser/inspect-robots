@@ -292,7 +292,8 @@ def rollout(
     messages_hook: Any = getattr(sink, "log_policy_messages", None)
     stream_ok = callable(delta_hook) and callable(messages_hook)
     console_ok = operator_input is not None
-    if _operator_end.active():
+    end_signal = _operator_end.active()
+    if end_signal:
         _operator_end.begin_trial()
 
     try:
@@ -549,6 +550,8 @@ def rollout(
         record.events.append(error_event(t, "KeyboardInterrupt", "cancelled by user"))
         raise _CancelledTrial(record.error, record) from exc
     finally:
+        if end_signal:
+            _operator_end.end_trial()
         _end_operator_trial(operator_input)
         # Preserve measured latencies even when the trial ends in an error.
         record.inference_latencies = [

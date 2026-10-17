@@ -1,4 +1,4 @@
-"""Signalled End (SIGUSR1): interrupt a blocked policy and never execute its late reply."""
+"""Signalled End (SIGURG): interrupt a blocked policy and never execute its late reply."""
 
 from __future__ import annotations
 
@@ -21,25 +21,25 @@ from inspect_robots.rollout import TrialRecord, rollout
 from inspect_robots.scene import Scene
 from inspect_robots.types import OPERATOR_END, Action, ActionChunk, Observation, StepResult
 
-pytestmark = pytest.mark.skipif(not hasattr(signal, "SIGUSR1"), reason="POSIX signals only")
+pytestmark = pytest.mark.skipif(not hasattr(signal, "SIGURG"), reason="POSIX signals only")
 
 _SCENE = Scene(id="s", instruction="reach", init_seed=0)
 
 
 @pytest.fixture
 def clean_signal(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Start with SIGUSR1 at its default and no handler, then restore process state."""
+    """Start with SIGURG at its default and no handler, then restore process state."""
     monkeypatch.delenv(_operator_end.READY_FILE_ENV, raising=False)
-    usr1 = signal.SIGUSR1  # a test may delete the attribute before teardown
-    previous = signal.getsignal(usr1)
+    urg = signal.SIGURG  # a test may delete the attribute before teardown
+    previous = signal.getsignal(urg)
     saved = (_operator_end._State.installed, _operator_end._State.requested)
-    signal.signal(usr1, signal.SIG_DFL)
+    signal.signal(urg, signal.SIG_DFL)
     _operator_end._State.installed = False
     _operator_end._State.requested = False
     try:
         yield
     finally:
-        signal.signal(usr1, previous)
+        signal.signal(urg, previous)
         _operator_end._State.installed, _operator_end._State.requested = saved
         _operator_end._State.interruptible = False
 
@@ -51,11 +51,11 @@ def end_signal(clean_signal: None) -> None:
 
 
 def _other_handler(signum: int, frame: object) -> None:
-    """An unrelated SIGUSR1 owner that does not end trials."""
+    """An unrelated SIGURG owner that does not end trials."""
 
 
 def _send_end() -> None:
-    os.kill(os.getpid(), signal.SIGUSR1)
+    os.kill(os.getpid(), signal.SIGURG)
 
 
 def _send_end_when(event: threading.Event) -> threading.Thread:
@@ -260,7 +260,7 @@ def test_without_handler_end_helpers_are_inert() -> None:
 @pytest.mark.usefixtures("end_signal")
 def test_install_is_idempotent() -> None:
     assert _operator_end.install()
-    assert signal.getsignal(signal.SIGUSR1) is _operator_end._handle
+    assert signal.getsignal(signal.SIGURG) is _operator_end._handle
 
 
 @pytest.mark.usefixtures("clean_signal")
@@ -269,13 +269,13 @@ def test_unrelated_owner_refuses_install_and_never_advertises_end(
 ) -> None:
     ready = tmp_path / "ready"
     monkeypatch.setenv(_operator_end.READY_FILE_ENV, str(ready))
-    signal.signal(signal.SIGUSR1, _other_handler)
+    signal.signal(signal.SIGURG, _other_handler)
 
-    with pytest.warns(RuntimeWarning, match="another handler already owns SIGUSR1"):
+    with pytest.warns(RuntimeWarning, match="another handler already owns SIGURG"):
         assert not _operator_end.install()
 
-    # SigCgt would still report a caught SIGUSR1; the ready file is the real signal.
-    assert signal.getsignal(signal.SIGUSR1) is _other_handler
+    # SigCgt would still report a caught SIGURG; the ready file is the real signal.
+    assert signal.getsignal(signal.SIGURG) is _other_handler
     assert not ready.exists()
     assert not _operator_end.active()
 
@@ -311,7 +311,7 @@ def test_replaced_handler_withdraws_end_and_its_ready_file(
     ready = tmp_path / "ready"
     monkeypatch.setenv(_operator_end.READY_FILE_ENV, str(ready))
     assert _operator_end.install()
-    signal.signal(signal.SIGUSR1, _other_handler)
+    signal.signal(signal.SIGURG, _other_handler)
 
     with pytest.warns(RuntimeWarning, match="another handler replaced it"):
         assert not _operator_end.active()
@@ -331,7 +331,7 @@ def test_withdrawal_keeps_a_ready_file_this_process_did_not_write(
     monkeypatch.setenv(_operator_end.READY_FILE_ENV, str(ready))
     assert _operator_end.install()
     ready.write_text("999999\n", encoding="utf-8")
-    signal.signal(signal.SIGUSR1, _other_handler)
+    signal.signal(signal.SIGURG, _other_handler)
 
     with pytest.warns(RuntimeWarning):
         assert not _operator_end.active()
@@ -346,20 +346,20 @@ def test_withdrawal_tolerates_missing_or_unset_ready_file(
     monkeypatch.setenv(_operator_end.READY_FILE_ENV, str(tmp_path / "ready"))
     assert _operator_end.install()
     (tmp_path / "ready").unlink()
-    signal.signal(signal.SIGUSR1, _other_handler)
+    signal.signal(signal.SIGURG, _other_handler)
     with pytest.warns(RuntimeWarning):
         assert not _operator_end.active()
 
     monkeypatch.delenv(_operator_end.READY_FILE_ENV)
-    signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+    signal.signal(signal.SIGURG, signal.SIG_DFL)
     assert _operator_end.install()
-    signal.signal(signal.SIGUSR1, _other_handler)
+    signal.signal(signal.SIGURG, _other_handler)
     with pytest.warns(RuntimeWarning):
         assert not _operator_end.active()
 
 
 @pytest.mark.usefixtures("clean_signal")
-def test_install_refusals_off_main_thread_and_without_sigusr1(
+def test_install_refusals_off_main_thread_and_without_sigurg(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Silent unless a supervisor asked for End.
@@ -373,8 +373,116 @@ def test_install_refusals_off_main_thread_and_without_sigusr1(
     with pytest.warns(RuntimeWarning, match="main thread"):
         assert not _operator_end._refuse("not installed from the main thread", always=False)
 
-    monkeypatch.delattr(signal, "SIGUSR1")
-    with pytest.warns(RuntimeWarning, match="no SIGUSR1"):
+    monkeypatch.delattr(signal, "SIGURG")
+    with pytest.warns(RuntimeWarning, match="no SIGURG"):
         assert not _operator_end.install()
     assert not _operator_end._State.installed
     assert not (tmp_path / "ready").exists()
+
+
+@pytest.mark.usefixtures("end_signal")
+def test_takeover_without_active_call_drops_end_instead_of_killing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ack = tmp_path / "ack"
+    monkeypatch.setenv(_operator_end.ACK_FILE_ENV, str(ack))
+    _operator_end.begin_trial()
+    try:
+        # Another component restores the default after installation; the
+        # supervisor sends End before anything calls active().
+        signal.signal(signal.SIGURG, signal.SIG_DFL)
+        _send_end()
+        time.sleep(0.05)
+    finally:
+        _operator_end.end_trial()
+
+    # Still alive: SIGURG's default is to ignore. No ack, so the supervisor knows.
+    assert not ack.exists()
+    assert not _operator_end._State.requested
+
+
+@pytest.mark.usefixtures("end_signal")
+def test_end_during_trial_is_acknowledged_with_pid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ack = tmp_path / "ack"
+    monkeypatch.setenv(_operator_end.ACK_FILE_ENV, str(ack))
+    policy = _BlockingPolicy()
+    sender = _send_end_when(policy.waiting)
+
+    record = _run(policy, _CountingEmbodiment())
+    sender.join(5)
+
+    assert record.termination_reason == OPERATOR_END
+    assert ack.read_text(encoding="utf-8") == f"{os.getpid()}\n"
+    assert not _operator_end._State.in_trial
+
+
+@pytest.mark.usefixtures("end_signal")
+def test_end_outside_a_trial_is_not_acknowledged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ack = tmp_path / "ack"
+    monkeypatch.setenv(_operator_end.ACK_FILE_ENV, str(ack))
+
+    _send_end()
+
+    assert _operator_end._State.requested
+    assert not ack.exists()
+
+
+@pytest.mark.usefixtures("end_signal")
+def test_unwritable_ack_file_still_ends_the_trial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(_operator_end.ACK_FILE_ENV, str(tmp_path / "missing" / "ack"))
+    policy = _BlockingPolicy()
+    embodiment = _CountingEmbodiment()
+    sender = _send_end_when(policy.waiting)
+
+    record = _run(policy, embodiment)
+    sender.join(5)
+
+    assert record.termination_reason == OPERATOR_END
+    assert embodiment.executed == 0
+
+
+@pytest.mark.usefixtures("clean_signal")
+def test_unadvertised_install_writes_no_ready_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert _operator_end.install(advertise=False)
+
+    ready = tmp_path / "ready"
+    monkeypatch.setenv(_operator_end.READY_FILE_ENV, str(ready))
+    with pytest.warns(RuntimeWarning, match="worker threads"):
+        assert _operator_end.install(advertise=False)
+
+    assert not ready.exists()
+    assert signal.getsignal(signal.SIGURG) is _operator_end._handle
+
+
+@pytest.mark.parametrize(("workers", "advertised"), [("1", True), ("2", False)])
+def test_cli_eval_set_advertises_end_only_without_parallel_workers(
+    monkeypatch: pytest.MonkeyPatch, workers: str, advertised: bool
+) -> None:
+    import inspect_robots.cli as cli
+
+    calls: list[bool] = []
+
+    def record_install(*, advertise: bool = True) -> bool:
+        calls.append(advertise)
+        return True
+
+    class _Stop(Exception):
+        pass
+
+    def stop(names: object) -> list[str]:
+        raise _Stop
+
+    monkeypatch.setattr(_operator_end, "install", record_install)
+    monkeypatch.setattr(cli, "_match_tasks", stop)
+    with pytest.raises(_Stop):
+        cli.main(["eval-set", "any-task", "--no-prompt", "--max-workers", workers])
+
+    assert calls == [advertised]
