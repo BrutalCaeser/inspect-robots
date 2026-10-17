@@ -386,15 +386,11 @@ def test_takeover_without_active_call_drops_end_instead_of_killing(
 ) -> None:
     ack = tmp_path / "ack"
     monkeypatch.setenv(_operator_end.ACK_FILE_ENV, str(ack))
-    _operator_end.begin_trial()
-    try:
-        # Another component restores the default after installation; the
-        # supervisor sends End before anything calls active().
-        signal.signal(signal.SIGURG, signal.SIG_DFL)
-        _send_end()
-        time.sleep(0.05)
-    finally:
-        _operator_end.end_trial()
+    # Another component restores the default after installation; the
+    # supervisor sends End before anything calls active().
+    signal.signal(signal.SIGURG, signal.SIG_DFL)
+    _send_end()
+    time.sleep(0.05)
 
     # Still alive: SIGURG's default is to ignore. No ack, so the supervisor knows.
     assert not ack.exists()
@@ -415,7 +411,6 @@ def test_end_during_trial_is_acknowledged_with_pid(
 
     assert record.termination_reason == OPERATOR_END
     assert ack.read_text(encoding="utf-8") == f"{os.getpid()}\n"
-    assert not _operator_end._State.in_trial
 
 
 @pytest.mark.usefixtures("end_signal")
@@ -486,3 +481,33 @@ def test_cli_eval_set_advertises_end_only_without_parallel_workers(
         cli.main(["eval-set", "any-task", "--no-prompt", "--max-workers", workers])
 
     assert calls == [advertised]
+
+
+@pytest.mark.usefixtures("end_signal")
+def test_end_between_final_check_and_step_is_acked_only_after_that_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ack = tmp_path / "ack"
+    monkeypatch.setenv(_operator_end.ACK_FILE_ENV, str(ack))
+    real_check = _operator_end.check
+    calls = 0
+
+    def check_then_signal_before_first_step() -> None:
+        nonlocal calls
+        calls += 1
+        real_check()
+        # Calls per iteration: loop top, policy-wait entry, then pre-step.
+        if calls == 3:
+            _send_end()
+
+    monkeypatch.setattr(_operator_end, "check", check_then_signal_before_first_step)
+    acked_at_step_start: list[bool] = []
+    embodiment = _CountingEmbodiment(on_step=lambda n: acked_at_step_start.append(ack.exists()))
+
+    record = _run(_BlockingPolicy(block_on=0), embodiment)
+
+    # The committed step runs uninterrupted, but no ack precedes it, and nothing follows.
+    assert acked_at_step_start == [False]
+    assert embodiment.executed == 1
+    assert record.termination_reason == OPERATOR_END
+    assert ack.read_text(encoding="utf-8") == f"{os.getpid()}\n"

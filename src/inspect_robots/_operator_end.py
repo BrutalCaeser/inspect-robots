@@ -22,10 +22,11 @@ protocol:
 - ``INSPECT_ROBOTS_END_SIGNAL_READY_FILE``: the PID is written here after
   installation, unless the run cannot honor End (parallel ``eval-set``). It is a
   hint for choosing signalled End over the keypress, not a guarantee.
-- ``INSPECT_ROBOTS_END_SIGNAL_ACK_FILE``: the handler writes the PID here each
-  time it receives End while a main-thread trial is running, meaning that trial
-  will execute no further action. A supervisor removes the file, sends
-  ``SIGURG``, and treats End as delivered only once the file names the PID.
+- ``INSPECT_ROBOTS_END_SIGNAL_ACK_FILE``: the rollout writes the PID here when a
+  main-thread trial has ended because of End, so no further action can start.
+  The handler never writes it: a step can already be committed when the signal
+  lands, and that step finishes before the ack. A supervisor removes the file,
+  sends ``SIGURG``, and treats End as delivered only once the file names the PID.
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ class _State:
     installed = False
     requested = False
     interruptible = False
-    in_trial = False
 
 
 def _on_main_thread() -> bool:
@@ -67,11 +67,6 @@ def _write_pid(path: str) -> None:
 
 def _handle(signum: int, frame: FrameType | None) -> None:
     _State.requested = True
-    ack = os.environ.get(ACK_FILE_ENV)
-    if ack and _State.in_trial:
-        # A missing ack is the supervisor's cue that End did not land.
-        with suppress(OSError):
-            _write_pid(ack)
     if _State.interruptible:
         # Disarm before raising so a repeated signal cannot interrupt the unwind.
         _State.interruptible = False
@@ -167,14 +162,17 @@ def active() -> bool:
 
 
 def begin_trial() -> None:
-    """Discard a request from before this trial and start acknowledging new ones."""
+    """Discard a request that arrived before this trial started."""
     _State.requested = False
-    _State.in_trial = True
 
 
-def end_trial() -> None:
-    """Stop acknowledging End: no running trial would act on it."""
-    _State.in_trial = False
+def acknowledge() -> None:
+    """Record that a trial ended because of End; a write failure leaves no ack."""
+    path = os.environ.get(ACK_FILE_ENV)
+    if path:
+        # A missing ack is the supervisor's cue that End did not land.
+        with suppress(OSError):
+            _write_pid(path)
 
 
 def check() -> None:
