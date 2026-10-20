@@ -23,9 +23,12 @@ Treat all of these as attacker-controlled:
   `taskgen`, `summarize`). Model output can be steered by prompt injection via
   camera images, task text, or operator messages.
 - **Code-as-policy:** `plugins/inspect-robots-capx` executes model-generated
-  Python in `_sandbox.py`. This is intended behaviour, but the namespace is meant
-  to expose only the robot API. Escapes from that namespace to the host
-  (filesystem, subprocess, network, other process state) are in scope.
+  Python in-process (`_sandbox.py`) with the evaluator's privileges. This is
+  documented behaviour, not a security boundary: users running untrusted models
+  must isolate the whole evaluator in a container or VM. Do not report imports,
+  file, network, or process access from generated code as vulnerabilities. In
+  scope: robot motion that generated code can produce without passing through
+  the approver chain, and bugs in how model output is parsed before execution.
 - **Robot middleware:** `plugins/inspect-robots-ros` speaks rosbridge JSON over
   websockets. A malicious or compromised rosbridge server is in scope.
 - **Eval logs and frame directories:** `inspect-robots view`, `inspect`,
@@ -62,6 +65,8 @@ Treat all of these as attacker-controlled:
 - Denial of service against the user's own eval run, unless it defeats a
   safety halt.
 - Leaking API keys the user passed to their own chosen provider endpoint.
+- Host access by CaP-X generated code (see above): it runs with full process
+  privileges by design.
 
 ## How to exercise it
 
@@ -76,8 +81,8 @@ Treat all of these as attacker-controlled:
 - **Critical:** remote code execution from a policy server, LLM response,
   rosbridge server, or shared log; or any input that sends an unapproved or
   out-of-bounds action to a robot.
-- **High:** sandbox escape in the CaP-X plugin; arbitrary file read or write
-  through `--serve` or log/frame paths; stored XSS in HTML reports.
+- **High:** arbitrary file read or write through `--serve` or log/frame paths;
+  stored XSS in HTML reports.
 - **Medium:** crashes or hangs that skip a safety halt or leave the robot
   without a clean stop; information disclosure of local files to a remote
   server.
