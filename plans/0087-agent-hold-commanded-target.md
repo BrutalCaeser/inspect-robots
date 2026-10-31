@@ -28,6 +28,10 @@ observation, is the state a move should continue from.
 - `Toolset` keeps the last accepted absolute target. Rejected moves (bounds, fixed dimensions,
   the pre-check, the playout cap) leave it unchanged.
 - `Toolset.reset()` clears it, and `LLMAgentPolicy.reset()` calls it at the start of each trial.
+- If the controller plays only part of a move (`DefaultController(replan_interval=k)` plays the
+  first k actions, then asks again), the next call holds the last waypoint the rollout stepped,
+  not the move's end. The toolset counts stepped actions with `extra["env_step"]`, as the capture
+  narration already does. Without `env_step` the move's end stays the setpoint.
 - The move tool descriptions say unnamed dimensions "hold their last commanded value (the
   measured value before the first move of a trial)".
 - Displacement modes are unchanged.
@@ -41,5 +45,7 @@ to choose in #595.
 
 ## Limits
 
-If an approver rewrites a move, the next move holds the target the tool asked for, not the
-rewritten one. That is the target the tool already reports for the residual.
+- If an approver rewrites an action (approvers clamp single actions; they don't cut chunks), the
+  next move holds the waypoint the tool asked for, not the clamped one. That is the target the
+  tool already reports for the residual.
+- A trial that ends partway through a move needs nothing: the next trial resets the setpoint.

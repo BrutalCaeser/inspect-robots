@@ -123,6 +123,10 @@ class Toolset:
         self._cameras = cameras
         self._pre_check = pre_check
         self._setpoint: npt.NDArray[np.float64] | None = None
+        # The last accepted move's waypoints and the env_step it was issued at, until the
+        # rollout has stepped it (``_settle_setpoint``).
+        self._setpoint_path: npt.NDArray[np.float64] | None = None
+        self._setpoint_issued: object = None
         if absolute:
             self._positive_limits = np.zeros_like(high)
             self._negative_limits = np.zeros_like(low)
@@ -137,6 +141,31 @@ class Toolset:
         actions use the measured state.
         """
         self._setpoint = None
+        self._setpoint_path = None
+        self._setpoint_issued = None
+
+    def _settle_setpoint(self, observation: Observation) -> None:
+        """Hold the last waypoint the rollout actually stepped, once it has stepped the move.
+
+        A controller may play only part of a chunk (``DefaultController(replan_interval=k)``
+        plays the first k actions, then asks again), and the embodiment then holds the last
+        action it was sent, not the motion's end. ``env_step`` counts the actions stepped
+        since the move was issued. Without it, the motion's end stays the setpoint.
+        """
+        path, issued = self._setpoint_path, self._setpoint_issued
+        if path is None:
+            return
+        arriving = observation.extra.get("env_step")
+        if not isinstance(issued, int) or not isinstance(arriving, int):
+            return
+        played = arriving - issued
+        if played <= 0:
+            # Not stepped yet: a later call in the same turn sees the same observation.
+            return
+        if played < len(path):
+            self._setpoint = path[played - 1].copy()
+        self._setpoint_path = None
+        self._setpoint_issued = None
 
     def state_labels(self) -> tuple[str, tuple[str, ...]] | None:
         """Return the state field and per-element labels selected at build time."""
@@ -318,6 +347,7 @@ class Toolset:
             return ToolResult(error=f"arguments for {call.name} are not valid JSON")
         if not isinstance(arguments, dict):
             return ToolResult(error=f"arguments for {call.name} must be a JSON object")
+        self._settle_setpoint(observation)
         if call.name in ("done", "give_up"):
             return self._stop(call.name, arguments, observation)
         if call.name == "take_pic" and self._images == "on_demand":
@@ -455,7 +485,9 @@ class Toolset:
 
         if self._absolute:
             assert current is not None
-            return self._move_absolute(values, vector, named_indices, current)
+            return self._move_absolute(
+                values, vector, named_indices, current, observation.extra.get("env_step")
+            )
         return self._move_displacement(vector, named_indices)
 
     def _move_absolute(
@@ -464,6 +496,7 @@ class Toolset:
         vector: npt.NDArray[np.float64],
         named_indices: list[int],
         current: npt.NDArray[np.float64],
+        issued_step: object = None,
     ) -> ToolResult:
         # Motion starts from, and unnamed dimensions hold, the last commanded target:
         # the setpoint the embodiment has been holding. A position-controlled gripper
@@ -516,6 +549,10 @@ class Toolset:
             if message := self._pre_check(waypoints):
                 return ToolResult(error="pre-check rejected this motion: " + message)
         self._setpoint = clipped_target.copy()
+        self._setpoint_path = np.stack(
+            [np.asarray(action.data, dtype=np.float64) for action in actions]
+        )
+        self._setpoint_issued = issued_step
         return self._success(actions, steps, target=clipped_target)
 
     def _move_displacement(

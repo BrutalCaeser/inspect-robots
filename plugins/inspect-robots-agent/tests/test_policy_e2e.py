@@ -2991,3 +2991,21 @@ def test_each_trial_starts_from_the_measured_state_not_the_last_trials_command()
     stop = policy.act(_vision_observation(q=-0.2))
     assert stop.actions[0].meta["request_stop"] is True
     assert float(stop.actions[0].data[0]) == -0.2
+
+
+def test_a_stop_after_a_move_cut_short_holds_the_last_action_the_rollout_stepped() -> None:
+    # A controller with replan_interval=2 plays two actions of the move, then asks again.
+    script = _Script(
+        [
+            _tool_response("move_joints", {"targets": {"joint": 0.3}}),
+            _tool_response("done", {"summary": "replanned"}),
+        ]
+    )
+    policy = _policy(script)
+    policy.bind(_VisionAbsoluteEmbodiment().info)
+    policy.reset(Scene(id="s0", instruction="move"))
+    moved = policy.act(_vision_observation(q=0.0, env_step=0))
+    assert len(moved.actions) > 2
+    stop = policy.act(_vision_observation(q=0.05, env_step=2))
+    assert stop.actions[0].meta["request_stop"] is True
+    np.testing.assert_array_equal(stop.actions[0].data, moved.actions[1].data)
